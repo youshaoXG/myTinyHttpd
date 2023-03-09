@@ -338,10 +338,7 @@ void server_file(SOCKET client, const char *fileName) {
 	// 2. 服务器要先从硬盘中把文件读取出来，然后再发送给浏览器
 	// 2.1 读取文件
 	FILE *resource = NULL;
-	// 判断文件类型，选择相应的打开方式（可通过后缀名判断，只要是.html结尾的就用"r"的方式打开）
-	/*if (strcmp(fileName, "htdocs/index.html") == 0) {// 这里就先简单判断
-		resource = fopen(fileName, "r");	// 打开文本文件（可读，非二进制）
-	}*/
+	// 判断文件类型，选择相应的打开方式（通过后缀名判断，只要是.html结尾的就用"r"的方式打开）
 	const char* p = strrchr(fileName, '.');
 	if (!strcmp(++p, "html")) {
 		resource = fopen(fileName, "r");	// 打开文本文件（可读，非二进制）
