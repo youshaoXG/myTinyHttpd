@@ -338,7 +338,10 @@ void server_file(SOCKET client, const char *fileName) {
 	// 2. 服务器要先从硬盘中把文件读取出来，然后再发送给浏览器
 	// 2.1 读取文件
 	FILE *resource = NULL;
-	// 判断文件类型，选择相应的打开方式（通过后缀名判断，只要是.html结尾的就用"r"的方式打开）
+	// 判断文件类型，选择相应的打开方式（可通过后缀名判断，只要是.html结尾的就用"r"的方式打开）
+	/*if (strcmp(fileName, "htdocs/index.html") == 0) {// 这里就先简单判断
+		resource = fopen(fileName, "r");	// 打开文本文件（可读，非二进制）
+	}*/
 	const char* p = strrchr(fileName, '.');
 	if (!strcmp(++p, "html")) {
 		resource = fopen(fileName, "r");	// 打开文本文件（可读，非二进制）
@@ -388,31 +391,39 @@ DWORD WINAPI accept_request(LPVOID arg) {
 	7-CGI发送处理结果；
 	8-HTTP服务器向浏览器发送POST请求的响应包。
 	*/
+	char buff[1024] = { 0 };			// 缓冲区。存储读取的一行数据，最大可存储1KB数据，一行数据没那么大的。
+	SOCKET client = (SOCKET)arg;;		// 客户端套接字
+	int numchars;						// 接收 get_line 返回的实际字节数
+	char method[255] = { 0 };			// 存储 http 请求的具体类型，例如：<FORM ACTION="color.cgi" METHOD="POST">
+	size_t i = 0, j = 0;				// 索引变量，j用于从buff中取字符，i用于写字符
+	char url[255] = { 0 };				// 存放请求的资源的路径
+	char path[512] = "";				// 存储资源完整路径的字符串
+	struct stat fileStatus;				// 用于保存文件属性
+	int cgi = 0;						// 如果服务器确定这是一个CGI程序，则变为真（非0值）
+	char* query_string = NULL;			// 查询字符串
 
 	// 服务器解析GET请求包
 	// 解析思路：读取一行数据，然后对其进行解析。
 
 	// 1. 读取一行数据（封装成函数）
 	// " GET / HTTP/1.1\n"
-	char buff[1024] = { 0 };			// 缓冲区。存储读取的一行数据，最大可存储1KB数据，一行数据没那么大的。
-	SOCKET client = (SOCKET)arg;		// 客户端套接字
-	int numchars = get_line(client, buff, sizeof(buff));// 读取一行数据，返回实际读取的字节数。
+	numchars = get_line(client, buff, sizeof(buff));// 读取一行数据，返回实际读取的字节数。
 	PRINTF(buff);						// 打印读取到的数据
 
 	// 2.1 解析请求方法（注意方法前面和后面都有可能存在若干空白字符，如空格、制表符、回车符等）
 	// 这里且认为行首不存在空白字符，只考虑行中是否存在空白字符
-	// 使用 isspace() 方法检查一个字符是否是空白字符，是，就跳过
+	// 使用 isspace() 方法检查一个字符是否是空白字符，是（返回非0），就跳过
 	// i < sizeof(method) - 1，减1是为结束符保留一个字节
-	char method[255] = { 0 };			// 存储请求方法名
-	int i = 0, j = 0;					// 索引变量，j用于从buff中取字符，i用于写字符
 	// 2.1.1 保存方法名到method中
 	while (!isspace(buff[j]) && i < sizeof(method) - 1) {
 		method[i++] = buff[j++];
 	}
-	method[i] = 0;						// 结束符'\0'
+	method[i] = '\0';					// 结束符'\0'
 	PRINTF(method);						// 打印读取到的方法名
+
 	// 2.1.1 检查请求的方法，本服务器是否支持
-	// 这里只考虑 GET 和 POST 两种请求方法，方法名不区分大小写
+	// HTTP的请求方法，一共有8种：GET,POST,HEAD,PUT,DELETE,TRACE,OPTIONS,CONNECT
+	// 这里暂时只实现 GET 和 POST 两种请求方法，方法名不区分大小写
 	// 如果不支持，就向浏览器返回一个错误提示页面（可以封装一个接口来实现该方法）
 	// 使用 stricmp 方法 <string.h>，但VS报错4996，
 	// 解决办法：禁用4996 或者 在项目属性中关闭SDL检查 或者 使用 _stricmp。
@@ -422,42 +433,55 @@ DWORD WINAPI accept_request(LPVOID arg) {
 	}
 
 	// 2.2 解析资源文件的路径
-	// www.youshao.com/abc/test.html
-	// " GET /abc/test.html HTTP/1.1\n"
-	char url[255] = { 0 };				// 存放请求的资源的路径
+	// www.youshao.com/htdocs/index.html
+	// " GET /htdocs/index.html HTTP/1.1\n"
 	i = 0;
-	// 2.2.1 跳过资源路径前面的空白符
+	// 2.2.1 跳过资源路径前面的空白符，也就是跳过 buff 中的空格
 	while (isspace(buff[j]) && j < sizeof(buff)) j++;
-	// 2.2.2 保存资源的路径到url中
+	// 2.2.2 获取资源的路径，保存到 url 中，比如 /
 	while (!isspace(buff[j]) && j < sizeof(buff) && (i < sizeof(url) - 1)) {
 		url[i++] = buff[j++];
 	}
 	url[i] = 0;							// 结束符'\0'
 	PRINTF(url);						// 打印请求资源的路径
 
+	/* 解析查询字符串 */
+	// 如果浏览器的访问地址是：http://127.0.0.1:8000?name=youshao
+	// 那么服务器端第一次收到的报文头就是：buff = GET /?name=youshao HTTP/1.1
+	// 这时，url = /?name=youshao
+	// 如果通过解析，query_string 的值就是 "name=youshao"，也就是
+	if (stricmp(method, "GET") == 0) {
+		query_string = url;
+		while ((*query_string != '?') && (*query_string != '\0')) query_string++;
+		if (*query_string == '?') {
+			cgi = 1;					// 确定是一个CGI请求
+			*query_string = '\0';
+			query_string++;
+		}
+	}
+
 	// 2.2.3 得到请求资源的完整路径
 	// 网址：www.youshao.com/
-	// IP地址：127.0.0.1/
-	// 端口号：8000
-	// 资源路径url：/（这并不是真正的资源路径）
+	// 比如浏览器输入：http://127.0.0.1:8000/test/
+	// 那么资源路径 url=/test/（这并不是真正的资源路径）
+	// 完整路径就是 path=htdocs/test/
 	// 我们现在要做的就是把请求资源的完整路径搞出来
-	// 按照后端开发通用的方式，我们会把所有相关的资源放到一个目录下，比如htdocs，我们需要在项目中创建这个目录
-	// 把该目录拼接到之前获取到的资源路径url后面即可。
-	char path[512] = "";				// 存储资源完整路径的字符串
+	// 按照后端开发通用的方式，我们会把所有相关的资源放到一个目录下，比如 htdocs
+	// 我们需要在项目中创建这个目录，把该目录拼接到之前获取到的资源路径 url 前面即可。
 	sprintf(path, "htdocs%s", url);		// 格式化字符串
 	// 遵循网络服务器开发的一个普遍习惯，如果没有明确指明访问哪个资源文件时，默认访问资源路径下的index.html
 	// 那么我们访问的资源的完整路径就是：/htdocs/index.html
-	// 如果path中的最后一个字符是 '/'，就把"index.html"拼接到后面
+	// 如果 path 中的最后一个字符是路径分隔符 '/'，就把"index.html"拼接到后面
 	if (path[strlen(path) - 1] == '/') {
 		strcat(path, "index.html");			// 拼接字符串
 	}
 	PRINTF(path);							// 打印请求资源的完整路径
-	// 但是如果路径是127.0.0.1/test，这里test就是一个目录名
-	// 使用 stat 方法访问文件属性，文件 or 目录，需要包含头文件 <sys/types.h> 和 <sys/stat.h>。
-	// 返回值：成功则返回0，失败返回-1，错误代码存于errno。
-	struct stat status;						// 用于保存文件属性
-	// 访问失败（资源文件不存在，服务器访问不到//，如网页丢失或者网址输错）//127.0.0.1:8000/abc.html ---> htdocs/abc.html
-	if (stat(path, &status) == -1) {
+
+	// 如果路径是127.0.0.1/test/，这里 test 就是一个目录名
+	// 使用 stat 方法获取指定文件属性，文件 or 目录，需包含头文件 <sys/types.h> 和 <sys/stat.h>。
+	// 返回值：成功则返回0，失败返回-1，错误代码存于 errno。
+	// 访问失败（资源文件不存在，如网页丢失或者网址输错，服务器就访问不到）
+	if (stat(path, &fileStatus) == -1) {
 		printf("资源文件不存在，服务器访问不到！\n");
 		// 读取请求包剩下的所有数据（请求头部行的数据）（尾行只有一个空行，此时strcmp返回0，跳出循环）
 		while (numchars > 0 && strcmp(buff, "\n")) {
@@ -472,12 +496,12 @@ DWORD WINAPI accept_request(LPVOID arg) {
 		printf("服务器访问资源成功！\n");
 		// 判断路径是文件还是目录
 		// 按位与&，S_IFMT 来表示文件的类型，按位操作的结果就可以判断它是文件 or 目录。
-		// 如果是目录
-		if ((status.st_mode & S_IFMT) == S_IFDIR) {
+		// 如果是目录，就直接在末尾拼接一个 /index.html
+		if ((fileStatus.st_mode & S_IFMT) == S_IFDIR) {
 			strcat(path, "/index.html");	// 末尾拼接一个 /index.html
 		}
 
-		// 发送资源给浏览器（封装成函数）（发送一个合法网页）
+		// 发送资源文件给浏览器（封装成函数）（一个合法网页）
 		server_file(client, path);
 	}
 
