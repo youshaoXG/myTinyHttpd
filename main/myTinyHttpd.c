@@ -181,7 +181,36 @@ int get_line(SOCKET sock, char* buff, unsigned int size) {
 
 // 向指定客户端（套接字）发送一个提示还没有实现的错误页面
 void unimplement(SOCKET client) {
-	// to do.
+	// 发送 501 未实现服务的响应包
+	/* HTTP 状态码分为 5 类，如下示：
+		1xx 信息
+		2xx 成功
+		3xx 重定向
+		4xx 客户端错误
+			404 表示服务器找不到浏览器请求的资源（例如某个图片或某个文件）。
+		5xx 服务器错误
+			501 表示服务器现在还不能满足客户端请求的某个功能。
+	*/
+	// 向浏览器发送一个错误提示信息，表示请求的方法还没有实现（现在只实现了GET和POST)
+	char buff[1024];
+
+	sprintf(buff, "HTTP/1.0 501 Method Not Implemented\r\n");
+	send(client, buff, strlen(buff), 0);
+
+	sprintf(buff, "Server: YouShaoHttpd/0.1\r\n");
+	send(client, buff, strlen(buff), 0);
+	sprintf(buff, "Content-Type: text/html\r\n");
+	send(client, buff, strlen(buff), 0);
+	sprintf(buff, "\r\n");
+	send(client, buff, strlen(buff), 0);
+	sprintf(buff, "<HTML><HEAD><TITLE>Method Not Implemented\r\n");
+	send(client, buff, strlen(buff), 0);
+	sprintf(buff, "</TITLE></HEAD>\r\n");
+	send(client, buff, strlen(buff), 0);
+	sprintf(buff, "<BODY><P>HTTP request method not supported.\r\n");
+	send(client, buff, strlen(buff), 0);
+	sprintf(buff, "</BODY></HTML>\r\n");
+	send(client, buff, strlen(buff), 0);
 }
 
 // 向指定客户端（套接字）发送一个网页不存在的提示信息，也就是404响应网页
@@ -422,12 +451,13 @@ DWORD WINAPI accept_request(LPVOID arg) {
 	PRINTF(method);						// 打印读取到的方法名
 
 	// 2.1.1 检查请求的方法，本服务器是否支持
-	// HTTP的请求方法，一共有8种：GET,POST,HEAD,PUT,DELETE,TRACE,OPTIONS,CONNECT
+	// HTTP的请求方法，一共有8种：GET,HEAD,POST,PUT,PATCH,DELETE,CONNECT,OPTIONS,TRACE
 	// 这里暂时只实现 GET 和 POST 两种请求方法，方法名不区分大小写
 	// 如果不支持，就向浏览器返回一个错误提示页面（可以封装一个接口来实现该方法）
-	// 使用 stricmp 方法 <string.h>，但VS报错4996，
+	// 使用 stricmp 方法需包含 <string.h>，但VS报错4996，
 	// 解决办法：禁用4996 或者 在项目属性中关闭SDL检查 或者 使用 _stricmp。
 	if (stricmp(method, "GET") && stricmp(method, "POST")) {
+		PRINTF(method);					// 打印读取到的方法名
 		unimplement(client);
 		return 0;						// 直接返回0，停止服务
 	}
